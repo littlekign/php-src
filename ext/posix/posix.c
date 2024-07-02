@@ -15,13 +15,12 @@
  */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
 #include <unistd.h>
 #include "ext/standard/info.h"
-#include "ext/standard/php_string.h"
 #include "php_posix.h"
 
 #ifdef HAVE_POSIX

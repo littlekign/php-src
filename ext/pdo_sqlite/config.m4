@@ -12,11 +12,7 @@ if test "$PHP_PDO_SQLITE" != "no"; then
 
   PHP_CHECK_PDO_INCLUDES
 
-  PKG_CHECK_MODULES([SQLITE], [sqlite3 >= 3.7.7])
-
-  PHP_EVAL_INCLINE($SQLITE_CFLAGS)
-  PHP_EVAL_LIBLINE($SQLITE_LIBS, PDO_SQLITE_SHARED_LIBADD)
-  AC_DEFINE(HAVE_PDO_SQLITELIB, 1, [Define to 1 if you have the pdo_sqlite extension enabled.])
+  PHP_SETUP_SQLITE([PDO_SQLITE_SHARED_LIBADD])
 
   PHP_CHECK_LIBRARY(sqlite3, sqlite3_close_v2, [
     AC_DEFINE(HAVE_SQLITE3_CLOSE_V2, 1, [have sqlite3_close_v2])
@@ -33,8 +29,9 @@ if test "$PHP_PDO_SQLITE" != "no"; then
   )
 
   PHP_SUBST(PDO_SQLITE_SHARED_LIBADD)
-  PHP_NEW_EXTENSION(pdo_sqlite, pdo_sqlite.c sqlite_driver.c sqlite_statement.c,
-    $ext_shared,,-I$pdo_cv_inc_path)
+  PHP_NEW_EXTENSION(pdo_sqlite, pdo_sqlite.c sqlite_driver.c sqlite_statement.c sqlite_sql_parser.c,
+    $ext_shared)
 
   PHP_ADD_EXTENSION_DEP(pdo_sqlite, pdo)
+  PHP_ADD_MAKEFILE_FRAGMENT
 fi

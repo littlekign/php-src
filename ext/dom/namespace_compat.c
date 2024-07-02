@@ -15,7 +15,7 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
@@ -54,9 +54,9 @@ static HashTable *php_dom_libxml_ns_mapper_ensure_prefix_map(php_dom_libxml_ns_m
 	if (zv == NULL) {
 		prefix_map = emalloc(sizeof(HashTable));
 		zend_hash_init(prefix_map, 0, NULL, php_dom_libxml_ns_mapper_prefix_map_element_dtor, false);
-		zval zv;
-		ZVAL_ARR(&zv, prefix_map);
-		zend_hash_add_new(&mapper->uri_to_prefix_map, *uri, &zv);
+		zval zv_prefix_map;
+		ZVAL_ARR(&zv_prefix_map, prefix_map);
+		zend_hash_add_new(&mapper->uri_to_prefix_map, *uri, &zv_prefix_map);
 	} else {
 		/* cast to Bucket* only works if this holds, I would prefer a static assert but we're stuck at C99. */
 		ZEND_ASSERT(XtOffsetOf(Bucket, val) == 0);
@@ -355,15 +355,12 @@ PHP_DOM_EXPORT void php_dom_reconcile_attribute_namespace_after_insertion(xmlAtt
 static zend_always_inline zend_long dom_mangle_pointer_for_key(void *ptr)
 {
 	zend_ulong value = (zend_ulong) (uintptr_t) ptr;
-	/* Shift 3/4 for better hash distribution because the low 3/4 bits are always 0. */
-#if SIZEOF_ZEND_LONG == 8
-	return value >> 4;
-#else
-	return value >> 3;
-#endif
+	/* Rotate 3/4 bits for better hash distribution because the low 3/4 bits are normally 0. */
+	const size_t rol_amount = (SIZEOF_ZEND_LONG == 8) ? 4 : 3;
+	return (value >> rol_amount) | (value << (sizeof(value) * 8 - rol_amount));
 }
 
-static zend_always_inline void php_dom_libxml_reconcile_modern_single_node(dom_libxml_reconcile_ctx *ctx, xmlNodePtr ns_holder, xmlNodePtr node)
+static zend_always_inline void php_dom_libxml_reconcile_modern_single_node(dom_libxml_reconcile_ctx *ctx, xmlNodePtr node)
 {
 	ZEND_ASSERT(node->ns != NULL);
 
@@ -404,12 +401,12 @@ static zend_always_inline void php_dom_libxml_reconcile_modern_single_element_no
 	ZEND_ASSERT(node->nsDef == NULL);
 
 	if (node->ns != NULL) {
-		php_dom_libxml_reconcile_modern_single_node(ctx, node, node);
+		php_dom_libxml_reconcile_modern_single_node(ctx, node);
 	}
 
 	for (xmlAttrPtr attr = node->properties; attr != NULL; attr = attr->next) {
 		if (attr->ns != NULL) {
-			php_dom_libxml_reconcile_modern_single_node(ctx, node, (xmlNodePtr) attr);
+			php_dom_libxml_reconcile_modern_single_node(ctx, (xmlNodePtr) attr);
 		}
 	}
 }
@@ -442,11 +439,6 @@ PHP_DOM_EXPORT void php_dom_libxml_reconcile_modern(php_dom_libxml_ns_mapper *ns
 
 		if (node->type == XML_ELEMENT_NODE) {
 			php_dom_libxml_reconcile_modern_single_element_node(&ctx, node);
-
-			if (node->children) {
-				node = node->children;
-				continue;
-			}
 		}
 
 		node = php_dom_next_in_tree_order(node, base);

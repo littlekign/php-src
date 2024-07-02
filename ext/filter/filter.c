@@ -18,10 +18,12 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php_filter.h"
+#include "main/php_variables.h"
+#include "ext/standard/info.h"
 
 ZEND_DECLARE_MODULE_GLOBALS(filter)
 

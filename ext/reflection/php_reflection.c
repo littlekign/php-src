@@ -19,7 +19,7 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
@@ -647,8 +647,8 @@ static zval *get_default_from_recv(zend_op_array *op_array, uint32_t offset) {
 }
 
 static int format_default_value(smart_str *str, zval *value) {
-	if (Z_TYPE_P(value) <= IS_STRING) {
-		smart_str_append_scalar(str, value, SIZE_MAX);
+	if (smart_str_append_zval(str, value, SIZE_MAX) == SUCCESS) {
+		/* Nothing to do. */
 	} else if (Z_TYPE_P(value) == IS_ARRAY) {
 		zend_string *str_key;
 		zend_long num_key;
@@ -675,14 +675,6 @@ static int format_default_value(smart_str *str, zval *value) {
 			format_default_value(str, zv);
 		} ZEND_HASH_FOREACH_END();
 		smart_str_appendc(str, ']');
-	} else if (Z_TYPE_P(value) == IS_OBJECT) {
-		/* This branch may only be reached for default properties, which don't support arbitrary objects. */
-		zend_object *obj = Z_OBJ_P(value);
-		zend_class_entry *class = obj->ce;
-		ZEND_ASSERT(class->ce_flags & ZEND_ACC_ENUM);
-		smart_str_append(str, class->name);
-		smart_str_appends(str, "::");
-		smart_str_append(str, Z_STR_P(zend_enum_fetch_case_name(obj)));
 	} else {
 		ZEND_ASSERT(Z_TYPE_P(value) == IS_CONSTANT_AST);
 		zend_string *ast_str = zend_ast_export("", Z_ASTVAL_P(value), "");
@@ -2251,18 +2243,11 @@ ZEND_METHOD(ReflectionGenerator, __construct)
 {
 	zval *generator, *object;
 	reflection_object *intern;
-	zend_execute_data *ex;
 
 	object = ZEND_THIS;
 	intern = Z_REFLECTION_P(object);
 
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "O", &generator, zend_ce_generator) == FAILURE) {
-		RETURN_THROWS();
-	}
-
-	ex = ((zend_generator *) Z_OBJ_P(generator))->execute_data;
-	if (!ex) {
-		_DO_THROW("Cannot create ReflectionGenerator based on a terminated Generator");
 		RETURN_THROWS();
 	}
 
@@ -2278,7 +2263,7 @@ ZEND_METHOD(ReflectionGenerator, __construct)
 
 #define REFLECTION_CHECK_VALID_GENERATOR(ex) \
 	if (!ex) { \
-		_DO_THROW("Cannot fetch information from a terminated Generator"); \
+		_DO_THROW("Cannot fetch information from a closed Generator"); \
 		RETURN_THROWS(); \
 	}
 
@@ -2354,22 +2339,20 @@ ZEND_METHOD(ReflectionGenerator, getExecutingFile)
 ZEND_METHOD(ReflectionGenerator, getFunction)
 {
 	zend_generator *generator = (zend_generator *) Z_OBJ(Z_REFLECTION_P(ZEND_THIS)->obj);
-	zend_execute_data *ex = generator->execute_data;
+	zend_function *func = generator->func;
 
 	if (zend_parse_parameters_none() == FAILURE) {
 		RETURN_THROWS();
 	}
 
-	REFLECTION_CHECK_VALID_GENERATOR(ex)
-
-	if (ex->func->common.fn_flags & ZEND_ACC_CLOSURE) {
+	if (func->common.fn_flags & ZEND_ACC_CLOSURE) {
 		zval closure;
-		ZVAL_OBJ(&closure, ZEND_CLOSURE_OBJECT(ex->func));
-		reflection_function_factory(ex->func, &closure, return_value);
-	} else if (ex->func->op_array.scope) {
-		reflection_method_factory(ex->func->op_array.scope, ex->func, NULL, return_value);
+		ZVAL_OBJ(&closure, ZEND_CLOSURE_OBJECT(func));
+		reflection_function_factory(func, &closure, return_value);
+	} else if (func->op_array.scope) {
+		reflection_method_factory(func->op_array.scope, func, NULL, return_value);
 	} else {
-		reflection_function_factory(ex->func, NULL, return_value);
+		reflection_function_factory(func, NULL, return_value);
 	}
 }
 /* }}} */
@@ -2411,6 +2394,18 @@ ZEND_METHOD(ReflectionGenerator, getExecutingGenerator)
 	RETURN_OBJ_COPY(&current->std);
 }
 /* }}} */
+
+ZEND_METHOD(ReflectionGenerator, isClosed)
+{
+	zend_generator *generator = (zend_generator *) Z_OBJ(Z_REFLECTION_P(ZEND_THIS)->obj);
+	zend_execute_data *ex = generator->execute_data;
+
+	if (zend_parse_parameters_none() == FAILURE) {
+		RETURN_THROWS();
+	}
+
+	RETURN_BOOL(ex == NULL);
+}
 
 /* {{{ Constructor. Throws an Exception in case the given method does not exist */
 ZEND_METHOD(ReflectionParameter, __construct)
@@ -6727,92 +6722,6 @@ ZEND_METHOD(ReflectionAttribute, getArguments)
 }
 /* }}} */
 
-static int call_attribute_constructor(
-	zend_attribute *attr, zend_class_entry *ce, zend_object *obj,
-	zval *args, uint32_t argc, HashTable *named_params, zend_string *filename)
-{
-	zend_function *ctor = ce->constructor;
-	zend_execute_data *call = NULL;
-	ZEND_ASSERT(ctor != NULL);
-
-	if (!(ctor->common.fn_flags & ZEND_ACC_PUBLIC)) {
-		zend_throw_error(NULL, "Attribute constructor of class %s must be public", ZSTR_VAL(ce->name));
-		return FAILURE;
-	}
-
-	if (filename) {
-		/* Set up dummy call frame that makes it look like the attribute was invoked
-		 * from where it occurs in the code. */
-		zend_function dummy_func;
-		zend_op *opline;
-
-		memset(&dummy_func, 0, sizeof(zend_function));
-
-		call = zend_vm_stack_push_call_frame_ex(
-			ZEND_MM_ALIGNED_SIZE_EX(sizeof(zend_execute_data), sizeof(zval)) +
-			ZEND_MM_ALIGNED_SIZE_EX(sizeof(zend_op), sizeof(zval)) +
-			ZEND_MM_ALIGNED_SIZE_EX(sizeof(zend_function), sizeof(zval)),
-			0, &dummy_func, 0, NULL);
-
-		opline = (zend_op*)(call + 1);
-		memset(opline, 0, sizeof(zend_op));
-		opline->opcode = ZEND_DO_FCALL;
-		opline->lineno = attr->lineno;
-
-		call->opline = opline;
-		call->call = NULL;
-		call->return_value = NULL;
-		call->func = (zend_function*)(call->opline + 1);
-		call->prev_execute_data = EG(current_execute_data);
-
-		memset(call->func, 0, sizeof(zend_function));
-		call->func->type = ZEND_USER_FUNCTION;
-		call->func->op_array.fn_flags =
-			attr->flags & ZEND_ATTRIBUTE_STRICT_TYPES ? ZEND_ACC_STRICT_TYPES : 0;
-		call->func->op_array.fn_flags |= ZEND_ACC_CALL_VIA_TRAMPOLINE;
-		call->func->op_array.filename = filename;
-
-		EG(current_execute_data) = call;
-	}
-
-	zend_call_known_function(ctor, obj, obj->ce, NULL, argc, args, named_params);
-
-	if (filename) {
-		EG(current_execute_data) = call->prev_execute_data;
-		zend_vm_stack_free_call_frame(call);
-	}
-
-	if (EG(exception)) {
-		zend_object_store_ctor_failed(obj);
-		return FAILURE;
-	}
-
-	return SUCCESS;
-}
-
-static void attribute_ctor_cleanup(
-		zval *obj, zval *args, uint32_t argc, HashTable *named_params) /* {{{ */
-{
-	if (obj) {
-		zval_ptr_dtor(obj);
-	}
-
-	if (args) {
-		uint32_t i;
-
-		for (i = 0; i < argc; i++) {
-			zval_ptr_dtor(&args[i]);
-		}
-
-		efree(args);
-	}
-
-	if (named_params) {
-		zend_array_destroy(named_params);
-	}
-}
-/* }}} */
-
 /* {{{ Returns the attribute as an object */
 ZEND_METHOD(ReflectionAttribute, newInstance)
 {
@@ -6821,10 +6730,6 @@ ZEND_METHOD(ReflectionAttribute, newInstance)
 	zend_attribute *marker;
 
 	zend_class_entry *ce;
-	zval obj;
-
-	zval *args = NULL;
-	HashTable *named_params = NULL;
 
 	if (zend_parse_parameters_none() == FAILURE) {
 		RETURN_THROWS();
@@ -6870,44 +6775,11 @@ ZEND_METHOD(ReflectionAttribute, newInstance)
 		}
 	}
 
-	if (SUCCESS != object_init_ex(&obj, ce)) {
+	zval obj;
+
+	if (SUCCESS != zend_get_attribute_object(&obj, ce, attr->data, attr->scope, attr->filename)) {
 		RETURN_THROWS();
 	}
-
-	uint32_t argc = 0;
-	if (attr->data->argc) {
-		args = emalloc(attr->data->argc * sizeof(zval));
-
-		for (uint32_t i = 0; i < attr->data->argc; i++) {
-			zval val;
-			if (FAILURE == zend_get_attribute_value(&val, attr->data, i, attr->scope)) {
-				attribute_ctor_cleanup(&obj, args, argc, named_params);
-				RETURN_THROWS();
-			}
-			if (attr->data->args[i].name) {
-				if (!named_params) {
-					named_params = zend_new_array(0);
-				}
-				zend_hash_add_new(named_params, attr->data->args[i].name, &val);
-			} else {
-				ZVAL_COPY_VALUE(&args[i], &val);
-				argc++;
-			}
-		}
-	}
-
-	if (ce->constructor) {
-		if (FAILURE == call_attribute_constructor(attr->data, ce, Z_OBJ(obj), args, argc, named_params, attr->filename)) {
-			attribute_ctor_cleanup(&obj, args, argc, named_params);
-			RETURN_THROWS();
-		}
-	} else if (argc || named_params) {
-		attribute_ctor_cleanup(&obj, args, argc, named_params);
-		zend_throw_error(NULL, "Attribute class %s does not have a constructor, cannot pass arguments", ZSTR_VAL(ce->name));
-		RETURN_THROWS();
-	}
-
-	attribute_ctor_cleanup(NULL, args, argc, named_params);
 
 	RETURN_COPY_VALUE(&obj);
 }

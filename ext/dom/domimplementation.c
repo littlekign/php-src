@@ -16,7 +16,7 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
@@ -100,8 +100,8 @@ PHP_METHOD(DOMImplementation, createDocumentType)
 	xmlFree(localname);
 
 	if (doctype == NULL) {
-		php_error_docref(NULL, E_WARNING, "Unable to create DocumentType");
-		RETURN_FALSE;
+		php_dom_throw_error(INVALID_STATE_ERR, /* strict */ true);
+		RETURN_THROWS();
 	}
 
 	DOM_RET_OBJ((xmlNodePtr) doctype, NULL);
@@ -306,7 +306,7 @@ PHP_METHOD(Dom_Implementation, createDocument)
 		(xmlNodePtr) document,
 		NULL
 	);
-	intern->document->class_type = PHP_LIBXML_CLASS_MODERN;
+	dom_set_xml_class(intern->document);
 	intern->document->private_data = php_dom_libxml_ns_mapper_header(ns_mapper);
 
 	/* 4. If doctype is non-null, append doctype to document. */
@@ -407,7 +407,7 @@ PHP_METHOD(Dom_Implementation, createHTMLDocument)
 		(xmlNodePtr) doc,
 		NULL
 	);
-	intern->document->class_type = PHP_LIBXML_CLASS_MODERN;
+	dom_set_xml_class(intern->document);
 	intern->document->private_data = php_dom_libxml_ns_mapper_header(ns_mapper);
 }
 /* }}} */

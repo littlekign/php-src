@@ -15,13 +15,15 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
 #if defined(HAVE_LIBXML) && defined(HAVE_DOM)
 #include "php_dom.h"
 #include "namespace_compat.h"
+#include "xml_serializer.h"
+#include <libxml/xmlsave.h>
 
 static bool check_options_validity(uint32_t arg_num, zend_long options)
 {
@@ -42,23 +44,23 @@ static bool check_options_validity(uint32_t arg_num, zend_long options)
 								  | XML_PARSE_HUGE
 								  | XML_PARSE_BIG_LINES;
 	if ((options & ~VALID_OPTIONS) != 0) {
-		zend_argument_value_error(2, "contains invalid flags (allowed flags: "
-									 "LIBXML_RECOVER, "
-									 "LIBXML_NOENT, "
-									 "LIBXML_DTDLOAD, "
-									 "LIBXML_DTDATTR, "
-									 "LIBXML_DTDVALID, "
-									 "LIBXML_NOERROR, "
-									 "LIBXML_NOWARNING, "
-									 "LIBXML_NOBLANKS, "
-									 "LIBXML_XINCLUDE, "
-									 "LIBXML_NSCLEAN, "
-									 "LIBXML_NOCDATA, "
-									 "LIBXML_NONET, "
-									 "LIBXML_PEDANTIC, "
-									 "LIBXML_COMPACT, "
-									 "LIBXML_PARSEHUGE, "
-									 "LIBXML_BIGLINES)");
+		zend_argument_value_error(arg_num, "contains invalid flags (allowed flags: "
+										   "LIBXML_RECOVER, "
+										   "LIBXML_NOENT, "
+										   "LIBXML_DTDLOAD, "
+										   "LIBXML_DTDATTR, "
+										   "LIBXML_DTDVALID, "
+										   "LIBXML_NOERROR, "
+										   "LIBXML_NOWARNING, "
+										   "LIBXML_NOBLANKS, "
+										   "LIBXML_XINCLUDE, "
+										   "LIBXML_NSCLEAN, "
+										   "LIBXML_NOCDATA, "
+										   "LIBXML_NONET, "
+										   "LIBXML_PEDANTIC, "
+										   "LIBXML_COMPACT, "
+										   "LIBXML_PARSEHUGE, "
+										   "LIBXML_BIGLINES)");
 		return false;
 	}
 	return true;
@@ -75,11 +77,6 @@ static void dom_mark_namespaces_as_attributes_too(php_dom_libxml_ns_mapper *ns_m
 	while (node != NULL) {
 		if (node->type == XML_ELEMENT_NODE) {
 			php_dom_ns_compat_mark_attribute_list(ns_mapper, node);
-
-			if (node->children) {
-				node = node->children;
-				continue;
-			}
 		}
 
 		node = php_dom_next_in_tree_order(node, NULL);
@@ -104,7 +101,7 @@ PHP_METHOD(Dom_XMLDocument, createEmpty)
 		zend_argument_value_error(2, "is not a valid document encoding");
 		RETURN_THROWS();
 	}
-	
+
 	xmlDocPtr lxml_doc = xmlNewDoc((const xmlChar *) version);
 	if (UNEXPECTED(lxml_doc == NULL)) {
 		goto oom;
@@ -118,7 +115,7 @@ PHP_METHOD(Dom_XMLDocument, createEmpty)
 		(xmlNodePtr) lxml_doc,
 		NULL
 	);
-	intern->document->class_type = PHP_LIBXML_CLASS_MODERN;
+	dom_set_xml_class(intern->document);
 	intern->document->private_data = php_dom_libxml_ns_mapper_header(php_dom_libxml_ns_mapper_create());
 	return;
 
@@ -200,7 +197,7 @@ static void load_from_helper(INTERNAL_FUNCTION_PARAMETERS, int mode)
 		if (!php_is_stream_path((char *) lxml_doc->URL)) {
 			/* Check for "file:/" instead of "file://" because of libxml2 quirk */
 			if (strncmp((const char *) lxml_doc->URL, "file:/", sizeof("file:/") - 1) != 0) {
-#if PHP_WIN32
+#ifdef PHP_WIN32
 				xmlChar *buffer = xmlStrdup((const xmlChar *) "file:///");
 #else
 				xmlChar *buffer = xmlStrdup((const xmlChar *) "file://");
@@ -215,7 +212,7 @@ static void load_from_helper(INTERNAL_FUNCTION_PARAMETERS, int mode)
 					}
 				}
 			} else {
-#if PHP_WIN32
+#ifdef PHP_WIN32
 				lxml_doc->URL = php_dom_libxml_fix_file_path(BAD_CAST lxml_doc->URL);
 #endif
 			}
@@ -227,7 +224,7 @@ static void load_from_helper(INTERNAL_FUNCTION_PARAMETERS, int mode)
 		(xmlNodePtr) lxml_doc,
 		NULL
 	);
-	intern->document->class_type = PHP_LIBXML_CLASS_MODERN;
+	dom_set_xml_class(intern->document);
 	dom_document_convert_to_modern(intern->document, lxml_doc);
 }
 
@@ -246,6 +243,94 @@ PHP_METHOD(Dom_XMLDocument, createFromString)
 PHP_METHOD(Dom_XMLDocument, createFromFile)
 {
 	load_from_helper(INTERNAL_FUNCTION_PARAM_PASSTHRU, DOM_LOAD_FILE);
+}
+
+static int php_new_dom_write_smart_str(void *context, const char *buffer, int len)
+{
+	smart_str *str = context;
+	smart_str_appendl(str, buffer, len);
+	return len;
+}
+
+static zend_string *php_new_dom_dump_node_to_str_ex(xmlNodePtr node, int options, bool format, const char *encoding)
+{
+	smart_str str = {0};
+
+	int status = -1;
+	xmlSaveCtxtPtr ctxt = xmlSaveToIO(php_new_dom_write_smart_str, NULL, &str, encoding, XML_SAVE_AS_XML | options);
+	if (EXPECTED(ctxt != NULL)) {
+		xmlCharEncodingHandlerPtr handler = xmlFindCharEncodingHandler(encoding);
+		xmlOutputBufferPtr out = xmlOutputBufferCreateIO(php_new_dom_write_smart_str, NULL, &str, handler);
+		if (EXPECTED(out != NULL)) {
+			status = dom_xml_serialize(ctxt, out, node, format);
+			status |= xmlOutputBufferFlush(out);
+			status |= xmlOutputBufferClose(out);
+		} else {
+			xmlCharEncCloseFunc(handler);
+		}
+		(void) xmlSaveClose(ctxt);
+	}
+
+	if (UNEXPECTED(status < 0)) {
+		smart_str_free_ex(&str, false);
+		return NULL;
+	}
+
+	return smart_str_extract(&str);
+}
+
+static zend_string *php_new_dom_dump_node_to_str(xmlDocPtr doc, xmlNodePtr node, bool format, const char *encoding)
+{
+	return php_new_dom_dump_node_to_str_ex(node, 0, format, encoding);
+}
+
+static zend_string *php_new_dom_dump_doc_to_str(xmlDocPtr doc, int options, const char *encoding)
+{
+	return php_new_dom_dump_node_to_str_ex((xmlNodePtr) doc, options, options & XML_SAVE_FORMAT, encoding);
+}
+
+zend_long php_new_dom_dump_node_to_file(const char *filename, xmlDocPtr doc, xmlNodePtr node, bool format, const char *encoding)
+{
+	xmlCharEncodingHandlerPtr handler = xmlFindCharEncodingHandler(encoding);
+	xmlOutputBufferPtr out = xmlOutputBufferCreateFilename(filename, handler, 0);
+	if (!out) {
+		xmlCharEncCloseFunc(handler);
+		return -1;
+	}
+
+	php_stream *stream = out->context;
+
+	int status = -1;
+	xmlSaveCtxtPtr ctxt = xmlSaveToIO(out->writecallback, NULL, stream, encoding, XML_SAVE_AS_XML);
+	if (EXPECTED(ctxt != NULL)) {
+		status = dom_xml_serialize(ctxt, out, node, format);
+		status |= xmlOutputBufferFlush(out);
+		(void) xmlSaveClose(ctxt);
+	}
+
+	size_t offset = php_stream_tell(stream);
+
+	(void) xmlOutputBufferClose(out);
+
+	return status < 0 ? status : (zend_long) offset;
+}
+
+static zend_long php_new_dom_dump_doc_to_file(const char *filename, xmlDocPtr doc, bool format, const char *encoding)
+{
+	return php_new_dom_dump_node_to_file(filename, doc, (xmlNodePtr) doc, format, encoding);
+}
+
+static const php_libxml_document_handlers php_new_dom_default_document_handlers = {
+	.dump_node_to_str = php_new_dom_dump_node_to_str,
+	.dump_doc_to_str = php_new_dom_dump_doc_to_str,
+	.dump_node_to_file = php_new_dom_dump_node_to_file,
+	.dump_doc_to_file = php_new_dom_dump_doc_to_file,
+};
+
+void dom_set_xml_class(php_libxml_ref_obj *document)
+{
+	document->class_type = PHP_LIBXML_CLASS_MODERN;
+	document->handlers = &php_new_dom_default_document_handlers;
 }
 
 #endif  /* HAVE_LIBXML && HAVE_DOM */

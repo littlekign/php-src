@@ -65,13 +65,6 @@ dnl
 dnl Checks for the configure options
 dnl
 
-dnl zlib is always required
-AC_DEFUN([PHP_GD_ZLIB],[
-  PKG_CHECK_MODULES([ZLIB], [zlib])
-  PHP_EVAL_LIBLINE($ZLIB_LIBS, GD_SHARED_LIBADD)
-  PHP_EVAL_INCLINE($ZLIB_CFLAGS)
-])
-
 dnl libpng is always required
 AC_DEFUN([PHP_GD_PNG],[
   PKG_CHECK_MODULES([PNG], [libpng])
@@ -147,14 +140,15 @@ dnl that gd defines "junk" versions of each gdImageCreateFromFoo function
 dnl even when it does not support the Foo format. Those junk functions
 dnl display a warning but eventually return normally, making a simple link
 dnl or run test insufficient.
-AC_DEFUN([PHP_GD_CHECK_FORMAT],[
-  old_LIBS="${LIBS}"
-  LIBS="${LIBS} ${GD_SHARED_LIBADD}"
-  old_CFLAGS="${CFLAGS}"
-  CFLAGS="${CFLAGS} ${GDLIB_CFLAGS}"
-  AC_MSG_CHECKING([for working gdImageCreateFrom$1 in libgd])
-  AC_LANG_PUSH([C])
-  AC_RUN_IFELSE([AC_LANG_SOURCE([
+AC_DEFUN([PHP_GD_CHECK_FORMAT],
+[AS_VAR_PUSHDEF([php_var], [php_cv_lib_gd_gdImageCreateFrom$1])
+old_LIBS="${LIBS}"
+LIBS="${LIBS} ${GD_SHARED_LIBADD}"
+old_CFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} ${GDLIB_CFLAGS}"
+AC_LANG_PUSH([C])
+AC_CACHE_CHECK([for working gdImageCreateFrom$1 in libgd], [php_var],
+  [AC_RUN_IFELSE([AC_LANG_SOURCE([
 #include <stdio.h>
 #include <unistd.h>
 #include <gd.h>
@@ -173,17 +167,17 @@ int main(int argc, char** argv) {
   gdSetErrorMethod(exit1);
   gdImagePtr p = gdImageCreateFrom$1(f);
   return 0;
-}])],[
-    AC_MSG_RESULT([yes])
-    AC_DEFINE($2, 1, [Does gdImageCreateFrom$1 work?])
-  ],[
-    AC_MSG_RESULT([no])
-  ],[
-    AC_MSG_RESULT([no])
-  ])
-  AC_LANG_POP([C])
-  CFLAGS="${old_CFLAGS}"
-  LIBS="${old_LIBS}"
+}])],
+  [AS_VAR_SET([php_var], [yes])],
+  [AS_VAR_SET([php_var], [no])],
+  [AS_VAR_SET([php_var], [no])])])
+AS_VAR_IF([php_var], [yes],
+  [AC_DEFINE_UNQUOTED([$2], [1],
+    [Define to 1 if GD library has 'gdImageCreateFrom$1'.])])
+AC_LANG_POP([C])
+CFLAGS="${old_CFLAGS}"
+LIBS="${old_LIBS}"
+AS_VAR_POPDEF([php_var])
 ])
 
 AC_DEFUN([PHP_GD_CHECK_VERSION],[
@@ -223,7 +217,7 @@ dnl These are always available with bundled library
     AC_DEFINE(HAVE_GD_TGA,              1, [ ])
 
 dnl Various checks for GD features
-    PHP_GD_ZLIB
+    PHP_SETUP_ZLIB([GD_SHARED_LIBADD])
     PHP_GD_PNG
     PHP_GD_AVIF
     PHP_GD_WEBP
@@ -232,9 +226,10 @@ dnl Various checks for GD features
     PHP_GD_FREETYPE2
     PHP_GD_JISX0208
 
-    PHP_NEW_EXTENSION(gd, gd.c $extra_sources, $ext_shared,, \\$(GD_CFLAGS))
-    PHP_ADD_BUILD_DIR($ext_builddir/libgd)
     GD_CFLAGS="-Wno-strict-prototypes -I$ext_srcdir/libgd $GD_CFLAGS"
+    PHP_NEW_EXTENSION(gd, gd.c $extra_sources, $ext_shared,, [$GD_CFLAGS])
+    PHP_ADD_BUILD_DIR($ext_builddir/libgd)
+
     PHP_INSTALL_HEADERS([ext/gd], [php_gd.h libgd/])
 
     PHP_TEST_BUILD(foobar, [], [
@@ -256,8 +251,5 @@ dnl Various checks for GD features
     ], [ $GD_SHARED_LIBADD ])
   fi
 
-  PHP_SUBST(GD_CFLAGS)
-  PHP_SUBST(GDLIB_CFLAGS)
-  PHP_SUBST(GDLIB_LIBS)
-  PHP_SUBST(GD_SHARED_LIBADD)
+  PHP_SUBST([GD_SHARED_LIBADD])
 fi

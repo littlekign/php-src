@@ -100,7 +100,7 @@ old_CPPFLAGS=$CPPFLAGS
 CPPFLAGS="-I$phpincludedir"
 AC_EGREP_CPP(php_zts_is_enabled,[
 #include <main/php_config.h>
-#if ZTS
+#ifdef ZTS
 php_zts_is_enabled
 #endif
 ],[
@@ -116,8 +116,9 @@ if test "$PHP_DEBUG" = "yes"; then
   PHP_DEBUG=1
   ZEND_DEBUG=yes
   changequote({,})
-  CFLAGS=`echo "$CFLAGS" | $SED -e 's/-O[0-9s]*//g'`
-  CXXFLAGS=`echo "$CXXFLAGS" | $SED -e 's/-O[0-9s]*//g'`
+  dnl Discard known '-O...' flags, including just '-O', but do not remove only '-O' in '-Ounknown'
+  CFLAGS=`echo "$CFLAGS" | $SED -e 's/-O\([0-9gsz]\|fast\|\)\([\t ]\|$\)//g'`
+  CXXFLAGS=`echo "$CXXFLAGS" | $SED -e 's/-O\([0-9gsz]\|fast\|\)\([\t ]\|$\)//g'`
   changequote([,])
   dnl Add -O0 only if GCC or ICC is used.
   if test "$GCC" = "yes" || test "$ICC" = "yes"; then
@@ -177,36 +178,32 @@ else
   BUILD_CC=$CC
 fi
 
-PHP_SUBST(PHP_MODULES)
-PHP_SUBST(PHP_ZEND_EX)
-
-PHP_SUBST(all_targets)
-PHP_SUBST(install_targets)
-
-PHP_SUBST(prefix)
-PHP_SUBST(exec_prefix)
-PHP_SUBST(libdir)
-PHP_SUBST(prefix)
-PHP_SUBST(phpincludedir)
-
-PHP_SUBST(CC)
-PHP_SUBST(CFLAGS)
-PHP_SUBST(CFLAGS_CLEAN)
-PHP_SUBST(CPP)
-PHP_SUBST(CPPFLAGS)
-PHP_SUBST(CXX)
-PHP_SUBST(CXXFLAGS)
-PHP_SUBST(CXXFLAGS_CLEAN)
-PHP_SUBST(EXTENSION_DIR)
-PHP_SUBST(PHP_EXECUTABLE)
-PHP_SUBST(EXTRA_LDFLAGS)
-PHP_SUBST(EXTRA_LIBS)
-PHP_SUBST(INCLUDES)
-PHP_SUBST(LDFLAGS)
-PHP_SUBST(LIBTOOL)
-PHP_SUBST(SHELL)
-PHP_SUBST(INSTALL_HEADERS)
-PHP_SUBST(BUILD_CC)
+PHP_SUBST([PHP_MODULES])
+PHP_SUBST([PHP_ZEND_EX])
+PHP_SUBST([all_targets])
+PHP_SUBST([install_targets])
+PHP_SUBST([prefix])
+PHP_SUBST([exec_prefix])
+PHP_SUBST([libdir])
+PHP_SUBST([phpincludedir])
+PHP_SUBST([CC])
+PHP_SUBST([CFLAGS])
+PHP_SUBST([CFLAGS_CLEAN])
+PHP_SUBST([CPP])
+PHP_SUBST([CPPFLAGS])
+PHP_SUBST([CXX])
+PHP_SUBST([CXXFLAGS])
+PHP_SUBST([CXXFLAGS_CLEAN])
+PHP_SUBST([EXTENSION_DIR])
+PHP_SUBST([PHP_EXECUTABLE])
+PHP_SUBST([EXTRA_LDFLAGS])
+PHP_SUBST([EXTRA_LIBS])
+PHP_SUBST([INCLUDES])
+PHP_SUBST([LDFLAGS])
+PHP_SUBST([LIBTOOL])
+PHP_SUBST([SHELL])
+PHP_SUBST([INSTALL_HEADERS])
+PHP_SUBST([BUILD_CC])
 
 AC_CONFIG_HEADERS([config.h])
 

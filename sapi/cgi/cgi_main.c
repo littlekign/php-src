@@ -36,11 +36,11 @@
 # include <process.h>
 #endif
 
-#if HAVE_SYS_TIME_H
+#ifdef HAVE_SYS_TIME_H
 # include <sys/time.h>
 #endif
 
-#if HAVE_UNISTD_H
+#ifdef HAVE_UNISTD_H
 # include <unistd.h>
 #endif
 
@@ -48,11 +48,11 @@
 
 #include <locale.h>
 
-#if HAVE_SYS_TYPES_H
+#ifdef HAVE_SYS_TYPES_H
 # include <sys/types.h>
 #endif
 
-#if HAVE_SYS_WAIT_H
+#ifdef HAVE_SYS_WAIT_H
 # include <sys/wait.h>
 #endif
 
@@ -87,7 +87,7 @@ int __riscosify_control = __RISCOSIFY_STRICT_UNIX_SPECS;
 #include "fastcgi.h"
 #include "cgi_main_arginfo.h"
 
-#if defined(PHP_WIN32) && defined(HAVE_OPENSSL)
+#if defined(PHP_WIN32) && defined(HAVE_OPENSSL_EXT)
 # include "openssl/applink.c"
 #endif
 
@@ -595,23 +595,23 @@ static char *sapi_fcgi_getenv(const char *name, size_t name_len)
 
 static char *_sapi_cgi_putenv(char *name, size_t name_len, char *value)
 {
-#if !HAVE_SETENV || !HAVE_UNSETENV
+#if !defined(HAVE_SETENV) || !defined(HAVE_UNSETENV)
 	size_t len;
 	char *buf;
 #endif
 
-#if HAVE_SETENV
+#ifdef HAVE_SETENV
 	if (value) {
 		setenv(name, value, 1);
 	}
 #endif
-#if HAVE_UNSETENV
+#ifdef HAVE_UNSETENV
 	if (!value) {
 		unsetenv(name);
 	}
 #endif
 
-#if !HAVE_SETENV || !HAVE_UNSETENV
+#if !defined(HAVE_SETENV) || !defined(HAVE_UNSETENV)
 	/*  if cgi, or fastcgi and not found in fcgi env
 		check the regular environment
 		this leaks, but it's only cgi anyway, we'll fix
@@ -623,13 +623,13 @@ static char *_sapi_cgi_putenv(char *name, size_t name_len, char *value)
 		return getenv(name);
 	}
 #endif
-#if !HAVE_SETENV
+#if !defined(HAVE_SETENV)
 	if (value) {
 		len = slprintf(buf, len - 1, "%s=%s", name, value);
 		putenv(buf);
 	}
 #endif
-#if !HAVE_UNSETENV
+#if !defined(HAVE_UNSETENV)
 	if (!value) {
 		len = slprintf(buf, len - 1, "%s=", name);
 		putenv(buf);
@@ -1737,7 +1737,7 @@ int main(int argc, char *argv[])
 	int warmup_repeats = 0;
 	int repeats = 1;
 	int benchmark = 0;
-#if HAVE_GETTIMEOFDAY
+#ifdef HAVE_GETTIMEOFDAY
 	struct timeval start, end;
 #else
 	time_t start, end;
@@ -1779,9 +1779,9 @@ int main(int argc, char *argv[])
 
 #ifdef PHP_WIN32
 	_fmode = _O_BINARY; /* sets default for file streams to binary */
-	setmode(_fileno(stdin),  O_BINARY);	/* make the stdio mode be binary */
-	setmode(_fileno(stdout), O_BINARY);	/* make the stdio mode be binary */
-	setmode(_fileno(stderr), O_BINARY);	/* make the stdio mode be binary */
+	_setmode(_fileno(stdin),  O_BINARY);	/* make the stdio mode be binary */
+	_setmode(_fileno(stdout), O_BINARY);	/* make the stdio mode be binary */
+	_setmode(_fileno(stderr), O_BINARY);	/* make the stdio mode be binary */
 #endif
 
 	if (!fastcgi) {
@@ -1796,8 +1796,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/* Apache CGI will pass the query string to the command line if it doesn't contain a '='.
+	 * This can create an issue where a malicious request can pass command line arguments to
+	 * the executable. Ideally we skip argument parsing when we're in cgi or fastcgi mode,
+	 * but that breaks PHP scripts on Linux with a hashbang: `#!/php-cgi -d option=value`.
+	 * Therefore, this code only prevents passing arguments if the query string starts with a '-'.
+	 * Similarly, scripts spawned in subprocesses on Windows may have the same issue. */
 	if((query_string = getenv("QUERY_STRING")) != NULL && strchr(query_string, '=') == NULL) {
-		/* we've got query string that has no = - apache CGI will pass it to command line */
 		unsigned char *p;
 		decoded_query_string = strdup(query_string);
 		php_url_decode(decoded_query_string, strlen(decoded_query_string));
@@ -1807,6 +1812,22 @@ int main(int argc, char *argv[])
 		if(*p == '-') {
 			skip_getopt = 1;
 		}
+
+		/* On Windows we have to take into account the "best fit" mapping behaviour. */
+#ifdef PHP_WIN32
+		if (*p >= 0x80) {
+			wchar_t wide_buf[1];
+			wide_buf[0] = *p;
+			char char_buf[4];
+			size_t wide_buf_len = sizeof(wide_buf) / sizeof(wide_buf[0]);
+			size_t char_buf_len = sizeof(char_buf) / sizeof(char_buf[0]);
+			if (WideCharToMultiByte(CP_ACP, 0, wide_buf, wide_buf_len, char_buf, char_buf_len, NULL, NULL) == 0
+				|| char_buf[0] == '-') {
+				skip_getopt = 1;
+			}
+		}
+#endif
+
 		free(decoded_query_string);
 	}
 
@@ -1899,7 +1920,7 @@ consult the installation file that came with this distribution, or visit \n\
 <a href=\"http://php.net/install.windows\">the manual page</a>.</p>\n");
 			} zend_catch {
 			} zend_end_try();
-#if defined(ZTS) && !defined(PHP_DEBUG)
+#if defined(ZTS) && !PHP_DEBUG
 			/* XXX we're crashing here in msvc6 debug builds at
 			 * php_message_handler_for_zend:839 because
 			 * SG(request_info).path_translated is an invalid pointer.
@@ -2210,7 +2231,7 @@ parent_loop_end:
 		} else {
 			parent = 0;
 		}
-#endif /* WIN32 */
+#endif /* PHP_WIN32 */
 	}
 
 	zend_first_try {

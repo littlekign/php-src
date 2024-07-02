@@ -15,7 +15,7 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 
@@ -162,12 +162,16 @@ zval *xmlreader_write_property(zend_object *object, zend_string *name, zval *val
 /* {{{ */
 static zend_function *xmlreader_get_method(zend_object **obj, zend_string *name, const zval *key)
 {
-	if (zend_string_equals_literal_ci(name, "open")) {
-		return (zend_function*)&xmlreader_open_fn;
-	} else if (zend_string_equals_literal_ci(name, "xml")) {
-		return (zend_function*)&xmlreader_xml_fn;
+	zend_function *method = zend_std_get_method(obj, name, key);
+	if (method && (method->common.fn_flags & ZEND_ACC_STATIC) && method->common.type == ZEND_INTERNAL_FUNCTION) {
+		/* There are only two static internal methods and they both have overrides. */
+		if (ZSTR_LEN(name) == sizeof("xml") - 1) {
+			return (zend_function *) &xmlreader_xml_fn;
+		} else if (ZSTR_LEN(name) == sizeof("open") - 1) {
+			return (zend_function *) &xmlreader_open_fn;
+		}
 	}
-	return zend_std_get_method(obj, name, key);
+	return method;
 }
 /* }}} */
 
@@ -272,6 +276,9 @@ static xmlRelaxNGPtr _xmlreader_get_relaxNG(char *source, size_t source_len, siz
 #endif
 
 static const zend_module_dep xmlreader_deps[] = {
+#ifdef HAVE_DOM
+	ZEND_MOD_REQUIRED("dom")
+#endif
 	ZEND_MOD_REQUIRED("libxml")
 	ZEND_MOD_END
 };
@@ -791,8 +798,24 @@ PHP_METHOD(XMLReader, next)
 }
 /* }}} */
 
+static bool xmlreader_valid_encoding(const char *encoding)
+{
+	if (!encoding) {
+		return true;
+	}
+
+	/* Normally we could use xmlTextReaderConstEncoding() afterwards but libxml2 < 2.12.0 has a bug of course
+	 * where it returns NULL for some valid encodings instead. */
+	xmlCharEncodingHandlerPtr handler = xmlFindCharEncodingHandler(encoding);
+	if (!handler) {
+		return false;
+	}
+	xmlCharEncCloseFunc(handler);
+	return true;
+}
+
 /* {{{ Sets the URI that the XMLReader will parse. */
-PHP_METHOD(XMLReader, open)
+static void xml_reader_from_uri(INTERNAL_FUNCTION_PARAMETERS, zend_class_entry *instance_ce, bool use_exceptions)
 {
 	zval *id;
 	size_t source_len = 0, encoding_len = 0;
@@ -803,7 +826,7 @@ PHP_METHOD(XMLReader, open)
 	char resolved_path[MAXPATHLEN + 1];
 	xmlTextReaderPtr reader = NULL;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "p|s!l", &source, &source_len, &encoding, &encoding_len, &options) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "p|p!l", &source, &source_len, &encoding, &encoding_len, &options) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -819,9 +842,9 @@ PHP_METHOD(XMLReader, open)
 		RETURN_THROWS();
 	}
 
-	if (encoding && CHECK_NULL_PATH(encoding, encoding_len)) {
-		php_error_docref(NULL, E_WARNING, "Encoding must not contain NUL bytes");
-		RETURN_FALSE;
+	if (!xmlreader_valid_encoding(encoding)) {
+		zend_argument_value_error(2, "must be a valid character encoding");
+		RETURN_THROWS();
 	}
 
 	valid_file = _xmlreader_get_valid_file_path(source, resolved_path, MAXPATHLEN );
@@ -833,12 +856,20 @@ PHP_METHOD(XMLReader, open)
 	}
 
 	if (reader == NULL) {
-		php_error_docref(NULL, E_WARNING, "Unable to open source data");
-		RETURN_FALSE;
+		if (use_exceptions) {
+			zend_throw_error(NULL, "Unable to open source data");
+			RETURN_THROWS();
+		} else {
+			php_error_docref(NULL, E_WARNING, "Unable to open source data");
+			RETURN_FALSE;
+		}
 	}
 
 	if (id == NULL) {
-		object_init_ex(return_value, xmlreader_class_entry);
+		if (UNEXPECTED(object_init_with_constructor(return_value, instance_ce, 0, NULL, NULL) != SUCCESS)) {
+			xmlFreeTextReader(reader);
+			RETURN_THROWS();
+		}
 		intern = Z_XMLREADER_P(return_value);
 		intern->ptr = reader;
 		return;
@@ -849,7 +880,87 @@ PHP_METHOD(XMLReader, open)
 	RETURN_TRUE;
 
 }
+
+PHP_METHOD(XMLReader, open)
+{
+	xml_reader_from_uri(INTERNAL_FUNCTION_PARAM_PASSTHRU, xmlreader_class_entry, false);
+}
+
+PHP_METHOD(XMLReader, fromUri)
+{
+	xml_reader_from_uri(INTERNAL_FUNCTION_PARAM_PASSTHRU, Z_CE_P(ZEND_THIS), true);
+}
 /* }}} */
+
+static int xml_reader_stream_read(void *context, char *buffer, int len)
+{
+	zend_resource *resource = context;
+	if (EXPECTED(resource->ptr)) {
+		php_stream *stream = resource->ptr;
+		return php_stream_read(stream, buffer, len);
+	}
+	return -1;
+}
+
+static int xml_reader_stream_close(void *context)
+{
+	zend_resource *resource = context;
+	/* Don't close it as others may still use it! We don't own the resource!
+	 * Just delete our reference (and clean up if we're the last one). */
+	zend_list_delete(resource);
+	return 0;
+}
+
+PHP_METHOD(XMLReader, fromStream)
+{
+	zval *stream_zv;
+	php_stream *stream;
+	char *document_uri = NULL;
+	char *encoding_name = NULL;
+	size_t document_uri_len, encoding_name_len;
+	zend_long flags = 0;
+
+	ZEND_PARSE_PARAMETERS_START(1, 4)
+		Z_PARAM_RESOURCE(stream_zv);
+		Z_PARAM_OPTIONAL
+		Z_PARAM_PATH_OR_NULL(encoding_name, encoding_name_len)
+		Z_PARAM_LONG(flags)
+		Z_PARAM_PATH_OR_NULL(document_uri, document_uri_len)
+	ZEND_PARSE_PARAMETERS_END();
+
+	php_stream_from_res(stream, Z_RES_P(stream_zv));
+
+	if (!xmlreader_valid_encoding(encoding_name)) {
+		zend_argument_value_error(2, "must be a valid character encoding");
+		RETURN_THROWS();
+	}
+
+	PHP_LIBXML_SANITIZE_GLOBALS(reader_for_stream);
+	xmlTextReaderPtr reader = xmlReaderForIO(
+		xml_reader_stream_read,
+		xml_reader_stream_close,
+		stream->res,
+		document_uri,
+		encoding_name,
+		flags
+	);
+	PHP_LIBXML_RESTORE_GLOBALS(reader_for_stream);
+
+	if (UNEXPECTED(reader == NULL)) {
+		zend_throw_error(NULL, "Could not construct libxml reader");
+		RETURN_THROWS();
+	}
+
+	/* When the reader is closed (even in error paths) the reference is destroyed. */
+	Z_ADDREF_P(stream_zv);
+
+	if (object_init_with_constructor(return_value, Z_CE_P(ZEND_THIS), 0, NULL, NULL) == SUCCESS) {
+		xmlreader_object *intern = Z_XMLREADER_P(return_value);
+		intern->ptr = reader;
+	} else {
+		xmlFreeTextReader(reader);
+	}
+}
 
 /* Not Yet Implemented in libxml - functions exist just not coded
 PHP_METHOD(XMLReader, resetState)
@@ -975,7 +1086,7 @@ XMLPUBFUN int XMLCALL
 */
 
 /* {{{ Sets the string that the XMLReader will parse. */
-PHP_METHOD(XMLReader, XML)
+static void xml_reader_from_string(INTERNAL_FUNCTION_PARAMETERS, zend_class_entry *instance_ce, bool throw)
 {
 	zval *id;
 	size_t source_len = 0, encoding_len = 0;
@@ -987,7 +1098,7 @@ PHP_METHOD(XMLReader, XML)
 	xmlParserInputBufferPtr inputbfr;
 	xmlTextReaderPtr reader;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|s!l", &source, &source_len, &encoding, &encoding_len, &options) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|p!l", &source, &source_len, &encoding, &encoding_len, &options) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -1003,9 +1114,9 @@ PHP_METHOD(XMLReader, XML)
 		RETURN_THROWS();
 	}
 
-	if (encoding && CHECK_NULL_PATH(encoding, encoding_len)) {
-		php_error_docref(NULL, E_WARNING, "Encoding must not contain NUL bytes");
-		RETURN_FALSE;
+	if (!xmlreader_valid_encoding(encoding)) {
+		zend_argument_value_error(2, "must be a valid character encoding");
+		RETURN_THROWS();
 	}
 
 	inputbfr = xmlParserInputBufferCreateMem(source, source_len, XML_CHAR_ENCODING_NONE);
@@ -1032,7 +1143,12 @@ PHP_METHOD(XMLReader, XML)
 			ret = xmlTextReaderSetup(reader, NULL, uri, encoding, options);
 			if (ret == 0) {
 				if (id == NULL) {
-					object_init_ex(return_value, xmlreader_class_entry);
+					if (UNEXPECTED(object_init_with_constructor(return_value, instance_ce, 0, NULL, NULL) != SUCCESS)) {
+						xmlFree(uri);
+						xmlFreeParserInputBuffer(inputbfr);
+						xmlFreeTextReader(reader);
+						RETURN_THROWS();
+					}
 					intern = Z_XMLREADER_P(return_value);
 				} else {
 					RETVAL_TRUE;
@@ -1058,10 +1174,26 @@ PHP_METHOD(XMLReader, XML)
 	if (inputbfr) {
 		xmlFreeParserInputBuffer(inputbfr);
 	}
-	php_error_docref(NULL, E_WARNING, "Unable to load source data");
-	RETURN_FALSE;
+
+	if (throw) {
+		zend_throw_error(NULL, "Unable to load source data");
+		RETURN_THROWS();
+	} else {
+		php_error_docref(NULL, E_WARNING, "Unable to load source data");
+		RETURN_FALSE;
+	}
 }
 /* }}} */
+
+PHP_METHOD(XMLReader, XML)
+{
+	xml_reader_from_string(INTERNAL_FUNCTION_PARAM_PASSTHRU, xmlreader_class_entry, false);
+}
+
+PHP_METHOD(XMLReader, fromString)
+{
+	xml_reader_from_string(INTERNAL_FUNCTION_PARAM_PASSTHRU, Z_CE_P(ZEND_THIS), true);
+}
 
 /* {{{ Moves the position of the current instance to the next node in the stream. */
 PHP_METHOD(XMLReader, expand)

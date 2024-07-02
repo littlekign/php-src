@@ -16,7 +16,7 @@
 */
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 
 #include "php.h"
@@ -185,6 +185,7 @@ zend_result dom_node_node_value_write(dom_object *obj, zval *newval)
 	/* Access to Element node is implemented as a convenience method */
 	switch (nodep->type) {
 		case XML_ATTRIBUTE_NODE:
+			dom_attr_value_will_change(obj, (xmlAttrPtr) nodep);
 			if (php_dom_follow_spec_intern(obj)) {
 				dom_remove_all_children(nodep);
 				xmlAddChild(nodep, xmlNewTextLen(BAD_CAST ZSTR_VAL(str), ZSTR_LEN(str)));
@@ -768,7 +769,7 @@ zend_result dom_node_text_content_write(dom_object *obj, zval *newval)
 
 /* }}} */
 
-static xmlNodePtr _php_dom_insert_fragment(xmlNodePtr nodep, xmlNodePtr prevsib, xmlNodePtr nextsib, xmlNodePtr fragment, dom_object *intern) /* {{{ */
+static xmlNodePtr dom_insert_fragment(xmlNodePtr nodep, xmlNodePtr prevsib, xmlNodePtr nextsib, xmlNodePtr fragment, dom_object *intern) /* {{{ */
 {
 	xmlNodePtr newchild, node;
 
@@ -908,7 +909,7 @@ static void dom_node_insert_before_legacy(zval *return_value, zval *ref, dom_obj
 			}
 		} else if (child->type == XML_DOCUMENT_FRAG_NODE) {
 			xmlNodePtr last = child->last;
-			new_child = _php_dom_insert_fragment(parentp, refp->prev, refp, child, intern);
+			new_child = dom_insert_fragment(parentp, refp->prev, refp, child, intern);
 			dom_reconcile_ns_list(parentp->doc, new_child, last);
 		} else {
 			new_child = xmlAddPrevSibling(refp, child);
@@ -958,7 +959,7 @@ static void dom_node_insert_before_legacy(zval *return_value, zval *ref, dom_obj
 			}
 		} else if (child->type == XML_DOCUMENT_FRAG_NODE) {
 			xmlNodePtr last = child->last;
-			new_child = _php_dom_insert_fragment(parentp, parentp->last, NULL, child, intern);
+			new_child = dom_insert_fragment(parentp, parentp->last, NULL, child, intern);
 			dom_reconcile_ns_list(parentp->doc, new_child, last);
 		} else {
 			new_child = xmlAddChild(parentp, child);
@@ -978,7 +979,7 @@ cannot_add:
 /* }}} end dom_node_insert_before */
 
 /* https://dom.spec.whatwg.org/#dom-node-insertbefore */
-static void dom_node_insert_before_modern(zval *return_value, zval *ref, dom_object *intern, dom_object *childobj, xmlNodePtr parentp, xmlNodePtr child)
+static void dom_node_insert_before_modern(zval *return_value, zval *ref, dom_object *intern, xmlNodePtr parentp, xmlNodePtr child)
 {
 	xmlNodePtr refp = NULL;
 	dom_object *refobjp;
@@ -1010,7 +1011,7 @@ static void dom_node_insert_before(INTERNAL_FUNCTION_PARAMETERS, bool modern)
 	DOM_GET_OBJ(child, node, xmlNodePtr, childobj);
 
 	if (modern) {
-		dom_node_insert_before_modern(return_value, ref, intern, childobj, parentp, child);
+		dom_node_insert_before_modern(return_value, ref, intern, parentp, child);
 	} else {
 		dom_node_insert_before_legacy(return_value, ref, intern, childobj, parentp, child);
 	}
@@ -1176,7 +1177,7 @@ static void dom_node_replace_child(INTERNAL_FUNCTION_PARAMETERS, bool modern)
 		xmlUnlinkNode(oldchild);
 
 		xmlNodePtr last = newchild->last;
-		newchild = _php_dom_insert_fragment(nodep, prevsib, nextsib, newchild, intern);
+		newchild = dom_insert_fragment(nodep, prevsib, nextsib, newchild, intern);
 		if (newchild && !modern) {
 			dom_reconcile_ns_list(nodep->doc, newchild, last);
 		}
@@ -1228,22 +1229,18 @@ static void dom_node_remove_child(INTERNAL_FUNCTION_PARAMETERS, zend_class_entry
 
 	DOM_GET_OBJ(nodep, ZEND_THIS, xmlNodePtr, intern);
 
-	if (!dom_node_children_valid(nodep)) {
-		RETURN_FALSE;
-	}
-
 	DOM_GET_OBJ(child, node, xmlNodePtr, childobj);
 
 	bool stricterror = dom_get_strict_error(intern->document);
 
-	if (dom_node_is_read_only(nodep) == SUCCESS ||
-		(child->parent != NULL && dom_node_is_read_only(child->parent) == SUCCESS)) {
-		php_dom_throw_error(NO_MODIFICATION_ALLOWED_ERR, stricterror);
+	if (!nodep->children || child->parent != nodep) {
+		php_dom_throw_error(NOT_FOUND_ERR, stricterror);
 		RETURN_FALSE;
 	}
 
-	if (!nodep->children || child->parent != nodep) {
-		php_dom_throw_error(NOT_FOUND_ERR, stricterror);
+	if (dom_node_is_read_only(nodep) == SUCCESS ||
+		(child->parent != NULL && dom_node_is_read_only(child->parent) == SUCCESS)) {
+		php_dom_throw_error(NO_MODIFICATION_ALLOWED_ERR, stricterror);
 		RETURN_FALSE;
 	}
 
@@ -1343,7 +1340,7 @@ static void dom_node_append_child_legacy(zval *return_value, dom_object *intern,
 		php_dom_reconcile_attribute_namespace_after_insertion((xmlAttrPtr) new_child);
 	} else if (child->type == XML_DOCUMENT_FRAG_NODE) {
 		xmlNodePtr last = child->last;
-		new_child = _php_dom_insert_fragment(nodep, nodep->last, NULL, child, intern);
+		new_child = dom_insert_fragment(nodep, nodep->last, NULL, child, intern);
 		dom_reconcile_ns_list(nodep->doc, new_child, last);
 	} else if (child->type == XML_DTD_NODE) {
 		if (nodep->doc->intSubset != NULL) {
@@ -2184,6 +2181,7 @@ static void dom_canonicalization(INTERNAL_FUNCTION_PARAMETERS, int mode) /* {{{ 
 			inclusive_ns_prefixes = safe_emalloc(zend_hash_num_elements(Z_ARRVAL_P(ns_prefixes)) + 1,
 				sizeof(xmlChar *), 0);
 			ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(ns_prefixes), tmpns) {
+				ZVAL_DEREF(tmpns);
 				if (Z_TYPE_P(tmpns) == IS_STRING) {
 					inclusive_ns_prefixes[nscount++] = BAD_CAST Z_STRVAL_P(tmpns);
 				}
@@ -2223,9 +2221,9 @@ static void dom_canonicalization(INTERNAL_FUNCTION_PARAMETERS, int mode) /* {{{ 
 		RETVAL_FALSE;
 	} else {
 		if (mode == 0) {
-			ret = xmlOutputBufferGetSize(buf);
-			if (ret > 0) {
-				RETVAL_STRINGL((char *) xmlOutputBufferGetContent(buf), ret);
+			size_t size = xmlOutputBufferGetSize(buf);
+			if (size > 0) {
+				RETVAL_STRINGL((char *) xmlOutputBufferGetContent(buf), size);
 			} else {
 				RETVAL_EMPTY_STRING();
 			}
