@@ -85,8 +85,10 @@ PHP 8.5 UPGRADE NOTES
 
 - Core:
   . Closure is now a proper subtype of callable
-  . Added support for Closures in constant expressions.
+  . Added support for Closures and first class callables in constant
+    expressions.
     RFC: https://wiki.php.net/rfc/closures_in_const_expr
+    RFC: https://wiki.php.net/rfc/fcc_in_const_expr
   . Fatal Errors (such as an exceeded maximum execution time) now include a
     backtrace.
     RFC: https://wiki.php.net/rfc/error_backtraces_v2
@@ -95,6 +97,18 @@ PHP 8.5 UPGRADE NOTES
   . Added support for share handles that are persisted across multiple PHP
     requests, safely allowing for more effective connection reuse.
     RFC: https://wiki.php.net/rfc/curl_share_persistence_improvement
+  . Added support for CURLINFO_USED_PROXY (libcurl >= 8.7.0),
+    CURLINFO_HTTPAUTH_USED, and CURLINFO_PROXYAUTH_USED
+    (libcurl >= 8.12.0) to the curl_getinfo() function.
+    When curl_getinfo() returns an array, the same information
+    is available as "used_proxy", "httpauth_used", and "proxyauth_used"
+    keys.
+    CURLINFO_USED_PROXY gets zero set if no proxy was used in the
+    previous transfer or a non-zero value if a proxy was used.
+    CURLINFO_HTTPAUTH_USED and CURLINFO_PROXYAUTH_USED get bitmasks
+    indicating the http and proxy authentication methods that were
+    used in the previous request. See CURLAUTH_* constants for
+    possible values.
 
 - DOM:
   . Added Dom\Element::$outerHTML.
@@ -247,6 +261,12 @@ PHP 8.5 UPGRADE NOTES
 9. Other Changes to Extensions
 ========================================
 
+- Fileinfo:
+  . Upgraded to file 5.46.
+
+- PCRE:
+  . Upgraded to pcre2lib from 10.44 to 10.45.
+
 - Readline:
   . The return types of readline_add_history(), readline_clear_history(), and
     readline_callback_handler_install() have been changed to true, rather
@@ -258,6 +278,11 @@ PHP 8.5 UPGRADE NOTES
 
 - Core:
   . PHP_BUILD_DATE.
+
+- Curl:
+  . CURLINFO_USED_PROXY.
+  . CURLINFO_HTTPAUTH_USED.
+  . CURLINFO_PROXYAUTH_USED.
 
 - POSIX:
   . POSIX_SC_OPEN_MAX.
@@ -340,6 +365,10 @@ PHP 8.5 UPGRADE NOTES
 ========================================
 14. Performance Improvements
 ========================================
+
+- ReflectionProperty:
+  . Improved performance of the following methods: getValue(), getRawValue(),
+    isInitialized(), setValue(), setRawValue().
 
 - XMLReader:
   . Improved property access performance.
