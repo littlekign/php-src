@@ -649,7 +649,7 @@ PHP_FUNCTION(imagesetstyle)
 	}
 
 	/* copy the style values in the stylearr */
-	stylearr = safe_emalloc(sizeof(int), num_styles, 0);
+	stylearr = safe_emalloc(num_styles, sizeof(int), 0);
 
 	ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(styles), item) {
 		stylearr[index++] = zval_get_long(item);
@@ -3361,6 +3361,17 @@ static void php_imagettftext_common(INTERNAL_FUNCTION_PARAMETERS, int mode)
 			RETURN_THROWS();
 		}
 		im = php_gd_libgdimageptr_from_zval_p(IM);
+	}
+
+	// FT_F26Dot6 is a signed long alias
+	if (ptsize < (double)LONG_MIN / 64 || ptsize > (double)LONG_MAX / 64) {
+		zend_argument_value_error(2, "must be between " ZEND_LONG_FMT " and " ZEND_LONG_FMT, (zend_long)((double)LONG_MIN / 64), (zend_long)((double)LONG_MAX / 64));
+		RETURN_THROWS();
+	}
+
+	if (UNEXPECTED(!zend_finite(ptsize))) {
+		zend_argument_value_error(2, "must be finite");
+		RETURN_THROWS();
 	}
 
 	/* convert angle to radians */
