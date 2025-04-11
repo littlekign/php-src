@@ -11031,11 +11031,10 @@ static bool zend_jit_verify_return_type(zend_jit_ctx *jit, const zend_op *opline
 			ref = zend_jit_zval_check_undef(jit, ref, opline->op1.var, NULL, 1);
 		}
 
-		ir_CALL_4(IR_VOID, ir_CONST_FC_FUNC(zend_jit_verify_return_slow),
+		ir_CALL_3(IR_VOID, ir_CONST_FC_FUNC(zend_jit_verify_return_slow),
 			ref,
 			ir_LOAD_A(jit_EX(func)),
-			ir_CONST_ADDR(arg_info),
-			ir_ADD_OFFSET(ir_LOAD_A(jit_EX(run_time_cache)), opline->op2.num));
+			ir_CONST_ADDR(arg_info));
 
 		zend_jit_check_exception(jit);
 
@@ -13700,6 +13699,13 @@ static int zend_jit_assign_dim_op(zend_jit_ctx   *jit,
 					ref_path = ir_END();
 					ir_IF_TRUE_cold(if_typed);
 
+					if (Z_MODE(op3_addr) == IS_REG) {
+						zend_jit_addr real_addr = ZEND_ADDR_MEM_ZVAL(ZREG_FP, (opline+1)->op1.var);
+						if (!zend_jit_spill_store_inv(jit, op3_addr, real_addr, op1_data_info)) {
+							return 0;
+						}
+						op3_addr = real_addr;
+					}
 					arg2 = jit_ZVAL_ADDR(jit, op3_addr);
 					ir_CALL_3(IR_VOID, ir_CONST_FC_FUNC(zend_jit_assign_op_to_typed_ref),
 						reference, arg2, ir_CONST_FC_FUNC(binary_op));

@@ -44,6 +44,7 @@ PHP                                                                        NEWS
     (timwolla, Volker Dusch)
   . Added get_error_handler(), get_exception_handler() functions. (Arnaud)
   . Fixed bug GH-15753 and GH-16198 (Bind traits before parent class). (ilutov)
+  . Added support for casts in constant expressions. (nielsdos)
 
 - Curl:
   . Added curl_multi_get_handles(). (timwolla)
@@ -62,6 +63,9 @@ PHP                                                                        NEWS
 - Enchant:
   . Added enchant_dict_remove_from_session(). (nielsdos)
   . Added enchant_dict_remove(). (nielsdos)
+
+- EXIF:
+  . Add OffsetTime* Exif tags. (acc987)
 
 - Fileinfo:
   . Upgrade to file 5.46. (nielsdos)

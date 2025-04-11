@@ -130,6 +130,7 @@ PHP 8.5 UPGRADE NOTES
     RFC: https://wiki.php.net/rfc/marking_return_value_as_important
   . Added asymmetric visibility support for static properties.
     RFC: https://wiki.php.net/rfc/static-aviz
+  . Added support for casts in constant expressions.
 
 - Curl:
   . Added support for share handles that are persisted across multiple PHP
@@ -147,9 +148,23 @@ PHP 8.5 UPGRADE NOTES
     indicating the http and proxy authentication methods that were
     used in the previous request. See CURLAUTH_* constants for
     possible values.
+  . Added CURLOPT_INFILESIZE_LARGE Curl option, which is a safe
+    replacement for CURLOPT_INFILESIZE. On certain systems,
+    CURLOPT_INFILESIZE only accepts a 32-bit signed integer as the file
+    size (2.0 GiB) even on 64-bit systems. CURLOPT_INFILESIZE_LARGE
+    accepts the largest integer value the system can handle.
 
 - DOM:
   . Added Dom\Element::$outerHTML.
+
+- EXIF:
+  . Add OffsetTime* Exif tags.
+
+- Intl:
+  . Added class constants NumberFormatter::CURRENCY_ISO,
+    NumberFormatter::CURRENCY_PLURAL, NumberFormatter::CASH_CURRENCY,
+    and NumberFormatter::CURRENCY_STANDARD for various currency-related
+    number formats.
 
 - XSL:
   . The $namespace argument of XSLTProcessor::getParameter(),
@@ -174,8 +189,8 @@ PHP 8.5 UPGRADE NOTES
     default.
 
 - FPM:
-  . FPM with httpd ProxyPass decodes the full scirpt path script path. Added
-    fastcgi.script_path_encoded INI setting to prevent this new behevior.
+  . FPM with httpd ProxyPass decodes the full script path. Added
+    fastcgi.script_path_encoded INI setting to prevent this new behavior.
 
 ========================================
 4. Deprecated Functionality
@@ -340,6 +355,7 @@ PHP 8.5 UPGRADE NOTES
   . CURLINFO_USED_PROXY.
   . CURLINFO_HTTPAUTH_USED.
   . CURLINFO_PROXYAUTH_USED.
+  . CURLOPT_INFILESIZE_LARGE.
 
 - Intl:
   . DECIMAL_COMPACT_SHORT.
@@ -435,6 +451,13 @@ PHP 8.5 UPGRADE NOTES
 - ReflectionProperty:
   . Improved performance of the following methods: getValue(), getRawValue(),
     isInitialized(), setValue(), setRawValue().
+
+- SPL:
+  . Improved performance of dimension accessors and methods of SplFixedArray.
+
+- Standard:
+  . Improved performance of array functions with callbacks
+    (array_find, array_filter, array_map, usort, ...).
 
 - XMLReader:
   . Improved property access performance.
