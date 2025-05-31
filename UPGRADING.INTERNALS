@@ -31,6 +31,9 @@ PHP 8.5 INTERNALS UPGRADE NOTES
     runtime.
   . Removed the cache_slot argument of zend_check_user_type_slow() because
     now it only relies on the CE cache.
+  . Added ZEND_NONSTRING attribute macro for character arrays that do not
+    represent strings. This allows to silence the GCC 15.x
+    `-Wunterminated-string-initialization` warning.
 
 ========================
 2. Build system changes
@@ -59,6 +62,7 @@ PHP 8.5 INTERNALS UPGRADE NOTES
 
 - ext/libxml
   . The refcount APIs now return an `unsigned int` instead of an `int`.
+  . Removed php_libxml_xmlCheckUTF8(). Use xmlCheckUTF8() from libxml instead.
 
 - ext/pdo
   . Added `php_pdo_stmt_valid_db_obj_handle()` to check if the database object
